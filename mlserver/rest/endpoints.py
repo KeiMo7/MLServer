@@ -2,7 +2,7 @@ from fastapi.requests import Request
 from fastapi.responses import Response, HTMLResponse, StreamingResponse
 from fastapi.openapi.docs import get_swagger_ui_html
 
-from typing import AsyncIterator, Optional
+from typing import TYPE_CHECKING, AsyncIterator, Optional
 
 from ..types import (
     MetadataModelResponse,
@@ -13,7 +13,16 @@ from ..types import (
     RepositoryIndexResponse,
 )
 from ..handlers import DataPlane, ModelRepositoryHandlers
-from ..utils import insert_headers, extract_headers
+from ..routing.errors import RouteNotFound
+from ..routing.types import (
+    RouteListResponse,
+    RouteStatus,
+    RouteSwitchRequest,
+)
+from ..utils import generate_uuid, insert_headers, extract_headers
+
+if TYPE_CHECKING:
+    from ..routing.router import ModelRouter
 
 from .responses import ServerSentEvent
 from .openapi import get_openapi_schema, get_model_schema_uri, get_model_schema
@@ -27,8 +36,17 @@ class Endpoints:
     business logic to the internal handlers.
     """
 
-    def __init__(self, data_plane: DataPlane):
+    def __init__(
+        self,
+        data_plane: DataPlane,
+        model_router: Optional["ModelRouter"] = None,
+        *,
+        router: Optional["ModelRouter"] = None,
+    ):
         self._data_plane = data_plane
+        self._model_router = model_router if model_router is not None else router
+        self.router = self._model_router
+        self._router = self._model_router
 
     async def live(self) -> Response:
         is_live = await self._data_plane.live()
@@ -107,6 +125,57 @@ class Endpoints:
             raw_response.headers.update(response_headers)
 
         return inference_response
+
+    async def list_routes(self) -> RouteListResponse:
+        if self._model_router is None:
+            return RouteListResponse(routes=[])
+
+        routes = await self._model_router.list_routes()
+        return RouteListResponse(routes=routes)
+
+    async def route_disabled(self, route_name: str) -> None:
+        raise RouteNotFound(route_name)
+
+    async def route_infer(
+        self,
+        raw_request: Request,
+        raw_response: Response,
+        payload: InferenceRequest,
+        route_name: str,
+    ) -> InferenceResponse:
+        if self._model_router is None:
+            raise RouteNotFound(route_name)
+
+        if not payload.id:
+            payload.id = generate_uuid()
+
+        request_headers = dict(raw_request.headers)
+
+        async with self._model_router.lease(route_name, payload.id) as target:
+            insert_headers(payload, request_headers)
+            inference_response = await self._data_plane.infer(
+                payload,
+                target.model,
+                target.version,
+            )
+            inference_response.model_name = target.model
+            inference_response.model_version = target.version
+
+            response_headers = extract_headers(inference_response)
+            if response_headers:
+                raw_response.headers.update(response_headers)
+
+            return inference_response
+
+    async def switch_route(
+        self,
+        route_name: str,
+        payload: RouteSwitchRequest,
+    ) -> RouteStatus:
+        if self._model_router is None:
+            raise RouteNotFound(route_name)
+
+        return await self._model_router.switch(route_name, payload.version)
 
     async def infer_stream(
         self,

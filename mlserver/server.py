@@ -2,7 +2,7 @@ import asyncio
 import signal
 import logging
 
-from typing import Optional, List
+from typing import TYPE_CHECKING, Optional, List
 
 from mlserver.repository.factory import ModelRepositoryFactory
 
@@ -17,14 +17,32 @@ from .rest import RESTServer
 from .grpc import GRPCServer
 from .metrics import MetricsServer
 from .kafka import KafkaServer
+from .routing import create_model_router, load_routing_config
 from .utils import logger
+
+if TYPE_CHECKING:
+    from .routing.router import ModelRouter
 
 HANDLED_SIGNALS = [signal.SIGINT, signal.SIGTERM, signal.SIGQUIT]
 
 
 class MLServer:
-    def __init__(self, settings: Settings):
+    def __init__(
+        self,
+        settings: Settings,
+        model_router: Optional["ModelRouter"] = None,
+        *,
+        router: Optional["ModelRouter"] = None,
+    ):
         self._settings = settings
+
+        # Validate routing configuration before installing signal handlers so
+        # that construction failures have a stable RoutingConfigError type even
+        # when MLServer is constructed outside a running event loop.
+        self._routing_config = None
+        if settings.routing_config_path is not None:
+            self._routing_config = load_routing_config(settings=settings)
+
         self._add_signal_handlers()
 
         self._metrics_server = None
@@ -43,11 +61,22 @@ class MLServer:
             )
 
         self._model_registry = self._create_model_registry()
+        self._model_router = model_router if model_router is not None else router
+        if self._model_router is None:
+            self._model_router = create_model_router(
+                self._settings,
+                self._model_registry,
+                routes=self._routing_config,
+            )
+        self.router = self._model_router
+
         self._model_repository = ModelRepositoryFactory.resolve_model_repository(
             self._settings
         )
         self._data_plane = DataPlane(
-            settings=self._settings, model_registry=self._model_registry
+            settings=self._settings,
+            model_registry=self._model_registry,
+            model_router=self._model_router,
         )
         self._model_repository_handlers = ModelRepositoryHandlers(
             repository=self._model_repository, model_registry=self._model_registry
@@ -101,7 +130,10 @@ class MLServer:
 
     def _create_servers(self):
         self._rest_server = RESTServer(
-            self._settings, self._data_plane, self._model_repository_handlers
+            self._settings,
+            self._data_plane,
+            self._model_repository_handlers,
+            model_router=self._model_router,
         )
         self._grpc_server = GRPCServer(
             self._settings, self._data_plane, self._model_repository_handlers

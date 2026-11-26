@@ -283,6 +283,17 @@ class Settings(BaseSettings):
     gzip_enabled: bool = True
     """Enable GZipMiddleware."""
 
+    routing_config_path: Optional[str] = None
+    """Path to the model routing configuration file.
+
+    When this is ``None``, stable routes, weighted routing and version switching
+    are disabled. Relative paths are resolved from
+    :attr:`model_repository_root`.
+    """
+
+    routing_drain_timeout: float = 30.0
+    """Maximum time to wait for in-flight routed requests before unloading."""
+
 
 class ModelParameters(BaseSettings):
     """

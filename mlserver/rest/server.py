@@ -1,14 +1,18 @@
 import uvicorn
 import signal
 
+from typing import TYPE_CHECKING, Optional
+
 from ..settings import Settings
 from ..handlers import DataPlane, ModelRepositoryHandlers, get_custom_handlers
 from ..model import MLModel
 
+if TYPE_CHECKING:
+    from ..routing.router import ModelRouter
+
 from .utils import matches
 from .app import create_app
 from .logging import logger, disable_health_access_logs
-from typing import Optional
 
 
 class _NoSignalServer(uvicorn.Server):
@@ -22,14 +26,21 @@ class RESTServer:
         settings: Settings,
         data_plane: DataPlane,
         model_repository_handlers: ModelRepositoryHandlers,
+        model_router: Optional["ModelRouter"] = None,
+        *,
+        router: Optional["ModelRouter"] = None,
     ):
         self._settings = settings
         self._data_plane = data_plane
         self._model_repository_handlers = model_repository_handlers
+        self._model_router = model_router if model_router is not None else router
+        self.router = self._model_router
+        self._router = self._model_router
         self._app = create_app(
             self._settings,
             data_plane=self._data_plane,
             model_repository_handlers=self._model_repository_handlers,
+            model_router=self._model_router,
         )
 
     async def add_custom_handlers(self, model: MLModel) -> MLModel:

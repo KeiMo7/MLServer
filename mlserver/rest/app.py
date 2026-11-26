@@ -1,4 +1,5 @@
-from typing import Callable
+from typing import TYPE_CHECKING, Callable, Optional
+
 from fastapi import FastAPI
 from fastapi.responses import Response as FastAPIResponse
 from fastapi.routing import APIRoute as FastAPIRoute
@@ -16,6 +17,9 @@ from .errors import _EXCEPTION_HANDLERS
 from ..settings import Settings
 from ..handlers import DataPlane, ModelRepositoryHandlers
 from ..tracing import get_tracer_provider
+
+if TYPE_CHECKING:
+    from ..routing.router import ModelRouter
 
 
 class APIRoute(FastAPIRoute):
@@ -53,8 +57,12 @@ def create_app(
     settings: Settings,
     data_plane: DataPlane,
     model_repository_handlers: ModelRepositoryHandlers,
+    model_router: Optional["ModelRouter"] = None,
+    *,
+    router: Optional["ModelRouter"] = None,
 ) -> FastAPI:
-    endpoints = Endpoints(data_plane)
+    resolved_router = model_router if model_router is not None else router
+    endpoints = Endpoints(data_plane, model_router=resolved_router)
     model_repository_endpoints = ModelRepositoryEndpoints(model_repository_handlers)
 
     routes = [
@@ -171,6 +179,36 @@ def create_app(
         APIRoute(
             "/v2/repository/models/{model_name}/unload",
             model_repository_endpoints.unload,
+            methods=["POST"],
+        ),
+    ]
+
+    infer_route_handler = (
+        endpoints.route_infer
+        if resolved_router is not None
+        else endpoints.route_disabled
+    )
+    switch_route_handler = (
+        endpoints.switch_route
+        if resolved_router is not None
+        else endpoints.route_disabled
+    )
+
+    routes += [
+        # Stable routing API
+        APIRoute(
+            "/v2/routing/routes",
+            endpoints.list_routes,
+            methods=["GET"],
+        ),
+        APIRoute(
+            "/v2/routing/routes/{route_name}/infer",
+            infer_route_handler,
+            methods=["POST"],
+        ),
+        APIRoute(
+            "/v2/routing/routes/{route_name}/switch",
+            switch_route_handler,
             methods=["POST"],
         ),
     ]

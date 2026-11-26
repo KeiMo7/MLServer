@@ -3,7 +3,7 @@ from prometheus_client import (
     Counter,
     Summary,
 )
-from typing import AsyncIterator, Optional
+from typing import TYPE_CHECKING, AsyncIterator, Optional
 
 from ..model import MLModel
 from ..errors import ModelNotReady
@@ -21,6 +21,9 @@ from ..cloudevents import CloudEventsMiddleware
 from ..utils import generate_uuid
 from ..cache import ResponseCache, LocalCache
 
+if TYPE_CHECKING:
+    from ..routing.router import ModelRouter
+
 
 class DataPlane:
     """
@@ -28,9 +31,19 @@ class DataPlane:
     servers.
     """
 
-    def __init__(self, settings: Settings, model_registry: MultiModelRegistry):
+    def __init__(
+        self,
+        settings: Settings,
+        model_registry: MultiModelRegistry,
+        model_router: Optional["ModelRouter"] = None,
+        *,
+        router: Optional["ModelRouter"] = None,
+    ):
         self._settings = settings
         self._model_registry = model_registry
+        self._model_router = model_router if model_router is not None else router
+        self.router = self._model_router
+        self._router = self._model_router
         self._response_cache = None
         if settings.cache_enabled:
             self._response_cache = self._create_response_cache()
